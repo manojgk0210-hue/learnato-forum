@@ -5,14 +5,14 @@ import Post from '../models/Post.js';
 const router = Router();
 
 const postSchema = z.object({
-  title: z.string().min(3),
-  content: z.string().min(3),
-  author: z.string().optional()
+  title: z.string().min(3, 'Title must be at least 3 characters'),
+  content: z.string().min(3, 'Content must be at least 3 characters'),
+  author: z.string().default('Anonymous').optional()
 });
 
 const replySchema = z.object({
-  content: z.string().min(1),
-  author: z.string().optional()
+  content: z.string().min(1, 'Reply cannot be empty'),
+  author: z.string().default('Anonymous').optional()
 });
 
 router.post('/', async (req, res, next) => {
@@ -39,6 +39,24 @@ router.get('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Get similar posts by query (must come before /:id route)
+router.get('/similar', async (req, res, next) => {
+  try {
+    const { q, limit = 5 } = req.query;
+    if (!q) return res.json([]);
+    
+    const filter = { $or: [
+      { title: { $regex: q, $options: 'i' }},
+      { content: { $regex: q, $options: 'i' }}
+    ]};
+    const cursor = Post.find(filter);
+    cursor.sort({ createdAt: -1 });
+    const posts = await cursor.exec();
+    res.json(posts.slice(0, parseInt(limit) || 5));
+  } catch (err) { next(err); }
+});
+
+// Get post by ID
 router.get('/:id', async (req, res, next) => {
   try {
     const post = await Post.findById(req.params.id);
@@ -47,15 +65,46 @@ router.get('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Get summary of a post
+router.get('/:id/summary', async (req, res, next) => {
+  try {
+    const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).json({ message: 'Not found' });
+    
+    // Simple AI-lite summary: take first 150 chars of content + show reply count
+    const summary = `${post.content.substring(0, 150)}${post.content.length > 150 ? '...' : ''} [${post.replies?.length || 0} reply(ies)]`;
+    res.json({ summary });
+  } catch (err) { next(err); }
+});
+
 router.post('/:id/reply', async (req, res, next) => {
   try {
     const data = replySchema.parse(req.body);
     const post = await Post.findById(req.params.id);
-    if (!post) return res.status(404).json({ message: 'Not found' });
-    post.replies.push(data);
+    if (!post) return res.status(404).json({ message: 'Post not found' });
+    
+    const reply = {
+      content: data.content,
+      author: data.author || 'Anonymous',
+      createdAt: new Date()
+    };
+    post.replies.push(reply);
+    
+    // For mock DB, just save it manually
+    if (!post.save) {
+      // Mock DB doesn't have save method, data is already in memory
+      const updated = await Post.findByIdAndUpdate(
+        req.params.id,
+        { $set: { replies: post.replies } },
+        { new: true }
+      );
+      req.io.emit('reply:created', { postId: updated._id, reply: updated.replies[updated.replies.length - 1] });
+      return res.status(201).json(updated);
+    }
+    
     await post.save();
-    const reply = post.replies[post.replies.length - 1];
-    req.io.emit('reply:created', { postId: post._id, reply });
+    const createdReply = post.replies[post.replies.length - 1];
+    req.io.emit('reply:created', { postId: post._id, reply: createdReply });
     res.status(201).json(post);
   } catch (err) { next(err); }
 });

@@ -5,7 +5,6 @@ import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import postsRouter from './routes/posts.js';
 
 dotenv.config();
 
@@ -25,19 +24,28 @@ app.use(morgan('dev'));
 app.use(express.json());
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
-app.use('/api/posts', postsRouter);
+// We'll load the posts routes after attempting DB connection so we can
+// fall back to an in-memory mock when MongoDB isn't available.
 
 app.use((err, req, res, next) => {
   console.error(err);
   res.status(400).json({ error: err.message || 'Bad Request' });
 });
 
-mongoose.connect(MONGO_URL).then(()=>{
+mongoose.connect(MONGO_URL).then(async ()=>{
   console.log('MongoDB connected');
+  const { default: postsRouter } = await import('./routes/posts.js');
+  app.use('/api/posts', postsRouter);
   httpServer.listen(PORT, () => {
     console.log(`API listening on port ${PORT}`);
   });
-}).catch(err=>{
+}).catch(async (err)=>{
   console.error('Mongo connection error', err);
-  process.exit(1);
+  console.log('Starting server with in-memory mock DB (USE_MOCK_DB=true)');
+  process.env.USE_MOCK_DB = 'true';
+  const { default: postsRouter } = await import('./routes/posts.js');
+  app.use('/api/posts', postsRouter);
+  httpServer.listen(PORT, () => {
+    console.log(`API listening on port ${PORT} (mock DB)`);
+  });
 });
