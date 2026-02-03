@@ -1,19 +1,18 @@
 version: '3.9'
+
 services:
   mongo:
     image: mongo:7
     restart: always
     volumes:
       - mongo-data:/data/db
-    ports:
-      - "27017:27017"
 
   api:
     build: ./backend
     environment:
       - MONGO_URL=mongodb://mongo:27017/learnato_forum
       - PORT=4000
-      - ORIGIN=http://localhost
+      - ORIGIN=*
     depends_on:
       - mongo
     ports:
@@ -21,10 +20,12 @@ services:
 
   web:
     build: ./frontend
+    environment:
+      - VITE_API_URL=http://api:4000
     depends_on:
       - api
     ports:
-      - "5173:80"
+      - "80:80"
 
 volumes:
   mongo-data:
