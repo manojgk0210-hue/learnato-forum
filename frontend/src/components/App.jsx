@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { io } from 'socket.io-client';
 import Login from './Login';
 
-const socket = io('/', { path: '/socket.io' });
+// Cloud-ready: connect to backend container or environment variable
+const API_URL = import.meta.env.VITE_API_URL || 'http://api:4000';
+const socket = io(API_URL, { path: '/socket.io' });
 
 function PostCard({ post, onOpen, onUpvote, onAnswer, user }) {
   const [isVoting, setIsVoting] = useState(false);
@@ -65,38 +67,36 @@ function PostCard({ post, onOpen, onUpvote, onAnswer, user }) {
 }
 
 export default function App() {
-  // ---------- Data/UI state ----------
   const [posts, setPosts] = useState([]);
   const [sort, setSort] = useState('date');
   const [q, setQ] = useState('');
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({ title: '', content: '', author: '' });
 
-  // ---------- Mock auth (name + role) ----------
   const [user, setUser] = useState(() => ({
     name: localStorage.getItem('user:name') || '',
     role: localStorage.getItem('user:role') || 'student',
   }));
+
   useEffect(() => {
     localStorage.setItem('user:name', user.name || '');
     localStorage.setItem('user:role', user.role || 'student');
   }, [user]);
 
-  // ---------- AI-lite states ----------
   const [suggestions, setSuggestions] = useState([]);
   const [summary, setSummary] = useState('');
   const [isSummarizing, setIsSummarizing] = useState(false);
 
-  // ---------- Load posts ----------
+  // Fetch posts from backend
   const fetchPosts = async () => {
-    const url = `/api/posts?sort=${sort}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
+    const url = `${API_URL}/posts?sort=${sort}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
     const res = await fetch(url);
     const data = await res.json();
     setPosts(data);
   };
   useEffect(() => { fetchPosts(); }, [sort, q]);
 
-  // ---------- Live updates ----------
+  // Socket.IO live updates
   useEffect(() => {
     socket.on('post:created', p => setPosts(prev => [p, ...prev]));
     socket.on('post:upvoted', p => setPosts(prev => prev.map(x => x._id === p._id ? p : x)));
@@ -108,80 +108,68 @@ export default function App() {
     return () => { socket.off(); };
   }, []);
 
-  // ---------- Create / actions ----------
+  // Actions
   const createPost = async (e) => {
     e.preventDefault();
-    const res = await fetch('/api/posts', {
+    const res = await fetch(`${API_URL}/posts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...form,
-        author: form.author || user.name || 'Anonymous',
-      })
+      body: JSON.stringify({ ...form, author: form.author || user.name || 'Anonymous' }),
     });
     if (res.ok) setForm({ title: '', content: '', author: '' });
   };
 
   const upvote = async (post) => {
-    await fetch(`/api/posts/${post._id}/upvote`, { method: 'POST' });
+    await fetch(`${API_URL}/posts/${post._id}/upvote`, { method: 'POST' });
   };
 
   const markAnswered = async (post) => {
-    await fetch(`/api/posts/${post._id}/answer`, {
+    await fetch(`${API_URL}/posts/${post._id}/answer`, {
       method: 'POST',
       headers: { 'x-role': user.role },
     });
   };
 
   const addReply = async (postId, content, author) => {
-    await fetch(`/api/posts/${postId}/reply`, {
+    await fetch(`${API_URL}/posts/${postId}/reply`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content, author }),
     });
   };
 
-  // ---------- Similar questions (debounced on Title) ----------
+  // Similar questions (debounced)
   useEffect(() => {
     const t = setTimeout(async () => {
       const s = (form.title || '').trim();
       if (s.length < 3) { setSuggestions([]); return; }
       try {
-        const r = await fetch(`/api/posts/similar?q=${encodeURIComponent(s)}&limit=5`);
+        const r = await fetch(`${API_URL}/posts/similar?q=${encodeURIComponent(s)}&limit=5`);
         const data = await r.json();
         setSuggestions(data);
-      } catch { /* ignore */ }
+      } catch { }
     }, 300);
     return () => clearTimeout(t);
   }, [form.title]);
 
-  // ---------- Summarize selected post ----------
+  // Summary
   const fetchSummary = async (id) => {
     try {
       setIsSummarizing(true);
       setSummary('Summarizing…');
-      const r = await fetch(`/api/posts/${id}/summary`);
+      const r = await fetch(`${API_URL}/posts/${id}/summary`);
       const data = await r.json();
       setSummary(data.summary || '(no summary)');
     } finally {
       setIsSummarizing(false);
     }
   };
-
-  // Clear summary when opening different post
   useEffect(() => { setSummary(''); }, [modal?._id]);
 
   const sorted = useMemo(() => posts, [posts]);
 
-  // If not logged in, show login page
   if (!user.name) {
-    return (
-      <Login 
-        onLogin={(loginData) => {
-          setUser({ name: loginData.name, role: loginData.role });
-        }}
-      />
-    );
+    return <Login onLogin={(loginData) => setUser({ name: loginData.name, role: loginData.role })} />;
   }
 
   return (
@@ -193,7 +181,7 @@ export default function App() {
           <p className="text-gray-600 mt-1">Empower learning through conversation.</p>
         </div>
 
-        {/* Search and Filters */}
+        {/* Search & Filters */}
         <div className="flex gap-3 items-center flex-wrap">
           <input
             value={q}
@@ -220,15 +208,11 @@ export default function App() {
             <option value="admin">Admin</option>
           </select>
 
-          {user.name && (
-            <div className="h-8 w-px bg-gray-300"></div>
-          )}
+          {user.name && <div className="h-8 w-px bg-gray-300"></div>}
 
           {user.name ? (
             <>
-              <div className="text-sm font-medium text-gray-700 whitespace-nowrap">
-                {user.name}
-              </div>
+              <div className="text-sm font-medium text-gray-700 whitespace-nowrap">{user.name}</div>
               <button
                 onClick={() => setUser({ name: '', role: 'student' })}
                 className="px-4 py-2 bg-red-600 text-white rounded-xl hover:bg-red-700 font-medium whitespace-nowrap"
@@ -246,19 +230,16 @@ export default function App() {
         <form onSubmit={createPost} className="md:col-span-1 bg-white rounded-2xl shadow-lg p-6 border border-gray-200 h-fit">
           <h2 className="font-bold text-lg mb-4 text-gray-900">New Discussion</h2>
           <div className="space-y-3">
-            <div>
-              <input
-                required
-                value={form.title}
-                onChange={e => setForm({ ...form, title: e.target.value })}
-                placeholder="Question title..."
-                maxLength="100"
-                className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <div className="text-xs text-gray-500 mt-1">{form.title.length}/100</div>
-            </div>
+            <input
+              required
+              value={form.title}
+              onChange={e => setForm({ ...form, title: e.target.value })}
+              placeholder="Question title..."
+              maxLength="100"
+              className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="text-xs text-gray-500 mt-1">{form.title.length}/100</div>
 
-            {/* Similar questions panel */}
             {suggestions.length > 0 && (
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm">
                 <div className="font-semibold mb-2 text-amber-900">💡 Similar questions found</div>
@@ -279,17 +260,15 @@ export default function App() {
               </div>
             )}
 
-            <div>
-              <textarea
-                required
-                value={form.content}
-                onChange={e => setForm({ ...form, content: e.target.value })}
-                placeholder="Describe your question in detail..."
-                maxLength="2000"
-                className="w-full px-3 py-2 border border-gray-300 rounded-xl h-32 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-              />
-              <div className="text-xs text-gray-500 mt-1">{form.content.length}/2000</div>
-            </div>
+            <textarea
+              required
+              value={form.content}
+              onChange={e => setForm({ ...form, content: e.target.value })}
+              placeholder="Describe your question in detail..."
+              maxLength="2000"
+              className="w-full px-3 py-2 border border-gray-300 rounded-xl h-32 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+            />
+            <div className="text-xs text-gray-500 mt-1">{form.content.length}/2000</div>
 
             <button
               type="submit"
@@ -309,20 +288,12 @@ export default function App() {
             </div>
           ) : (
             sorted.map(p => (
-              <PostCard
-                key={p._id}
-                post={p}
-                onOpen={setModal}
-                onUpvote={upvote}
-                onAnswer={markAnswered}
-                user={user}
-              />
+              <PostCard key={p._id} post={p} onOpen={setModal} onUpvote={upvote} onAnswer={markAnswered} user={user} />
             ))
           )}
         </div>
       </section>
 
-      {/* MODAL */}
       {modal && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50" onClick={() => setModal(null)}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl p-6" onClick={e => e.stopPropagation()}>
@@ -345,7 +316,6 @@ export default function App() {
 
             <p className="text-gray-700 whitespace-pre-wrap mb-4 leading-relaxed">{modal.content}</p>
 
-            {/* Summary block */}
             {summary && (
               <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-xl text-sm">
                 <div className="font-semibold mb-2 text-blue-900">Summary</div>
@@ -372,8 +342,6 @@ export default function App() {
           </div>
         </div>
       )}
-
-      {/* Logout handled by button in header */}
     </div>
   );
 }
